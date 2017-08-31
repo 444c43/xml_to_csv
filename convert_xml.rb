@@ -1,57 +1,42 @@
+require 'pg'
 require 'csv'
 require 'json'
 require 'active_support/core_ext/hash'
 require 'nokogiri'
 require 'byebug'
-require 'pp'
+
+class String
+  def is_integer?
+    self.to_i.to_s == self
+  end
+end
 
 class XMLParser
   def initialize(filename)
     @filename = filename
-    @file = File.read("#{filename}.xml")
+    @file = File.read("files/#{filename}.xml")
     @doc = Hash.from_xml(@file)
     @headers = get_headers(@doc).uniq
   end
 
-  def convert_to_csv
-    CSV.open("#{@filename}.csv", "wb") do |csv|
-      csv << @headers
+  def insert_into_db 
+    conn = PG.connect( dbname: 'probate' )
 
-      @doc["DailyRecordExport"]["Case"].each do |element|
-        foo = method_one element
-        csv << foo.values
-      end
+    @doc["DailyRecordExport"]["Case"].each do |record|
+      columns = record.map { |k,v| k if v.is_a?(String) }.compact.join(",")
+      data = record.map do |k,v|
+        %Q(#{v}) if v.is_integer? unless v.is_a?(Hash)
+        %Q('#{v}') if v.is_a?(String)
+      end.compact.join(',')
+
+      sql = "INSERT INTO cases (#{columns}) VALUES (#{data})"
+
+      conn.exec(sql)
     end
   end
 
   private
-
-  def get_headers(h)
-    h.each_with_object([]) do |(k,v),keys|      
-      keys << k
-      keys.concat(get_headers(v)) if v.is_a? Hash
-
-      v.each_with_object(keys) { |ary| keys.concat(get_headers(ary)) } if v.is_a? Array
-    end
-  end
-
-  def unnest(e)
-    e.each_with_object({}) do |(key,value), keys|
-      keys.merge!(key=>value) unless value.is_a?(Hash) || value.is_a?(Array)
-      value.each_with_object(keys) { |item| keys.merge!(unnest(item)) } if value.is_a?(Array)
-      keys.merge!(unnest(value)) if value.is_a? Hash
-    end
-  end
-
-  def method_one(elem)
-    element = unnest(elem)
-    foo = {}
-    @headers.each do |header|
-      element[header].nil? ? foo[header] = " " : foo[header] = element[header]
-    end
-    foo
-  end
 end
 
-parser = XMLParser.new("probate2")
-parser.convert_to_csv
+parser = XMLParser.new("pg_test")
+parser.insert_into_db
